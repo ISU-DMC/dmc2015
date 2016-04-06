@@ -1,0 +1,357 @@
+---
+title: Curation and Cross Validation to Reduce Features
+titleshort: Too many features
+instructions: 
+output:
+  usefulR::DMC_format
+---
+
+<!--- # (R code (No Results in Document)) -->
+```{r set-parent, echo=FALSE,warning=FALSE,error=FALSE,message=FALSE,cache=TRUE,warning=FALSE,include=FALSE,comment=NA}
+   #set up knitr
+   #devtools::install_github('imouzon/usefulR')
+   library(usefulR)
+
+   #set working directory
+   working.dir = "/Users/user/dmc2015/ian"
+   setwd(working.dir)
+
+   #compile the document to PDF
+   if(FALSE) 
+      rmarkdown::render("/Users/user/dmc2015/ian/examining_features.rmd")
+```
+
+I am using the following packages:
+<!--- # (R code (No Results in Document))-->
+```{r paks, echo=TRUE, cache=FALSE, message=FALSE, tidy=FALSE, include=TRUE}
+   library(magrittr)
+   library(dplyr)
+   library(reshape2)
+   library(tidyr)
+   library(lubridate)
+   library(ggplot2)
+   library(directlabels)
+   library(rCharts)
+   library(xtable)
+   library(foreach)
+   library(gtools)
+   library(knitr)
+   library(utils)
+   library(GGally)
+   source("~/dmc2015/ian/R/renm.R")
+```
+My working directory is set to \verb!~/dmc2015/ian/!.
+
+# Curating and Cross Validating
+
+The reason features should be removed from an "large data" approach to a problem
+is if they are dominated by better features.
+
+However, when you have as many features as we do at the moment it can be difficult to 
+
+I am starting with **set 1**
+
+# Load feature matrix
+<!--- dgg: R code (No Results in Document) -->
+```{r dgg,cache=FALSE}
+   ## long 
+   fml = readRDS("../data/featureMatrix/featMat_based-on-HTVset1_LONG_ver0.6.rds")
+
+   names(fml[
+
+   ## wide
+   fmw = readRDS("../data/featureMatrix/featMat_based-on-HTVset1_WIDE_ver0.6.rds")
+
+   #estimate weights from the historical data:
+   HTVset = readRDS("~/dmc2015/data/featureMatrix/HTVset1.rds")
+
+   #load the following
+   ## d
+   ## dm
+   ## dmc
+   ## Historical estimates of p1,p2,p3:
+   source("./load_data.r")
+    
+   ## Baseline basketValue
+   sum((fmw$validation$y$basketValue - mean(HTVset$H$basketValue))^2)/mean(fmw$validation$y$basketValue)^2
+
+   ## baseline coupons 1
+   sum((fmw$validation$y$coupon1Used - mean(HTVset$H$coupon1Used))^2)/mean(fmw$validation$y$coupon1Used)^2
+   
+   ## baseline coupons 2
+   sum((fmw$validation$y$coupon2Used - mean(HTVset$H$coupon2Used))^2)/mean(fmw$validation$y$coupon2Used)^2
+
+   ## baseline coupons 3
+   sum((fmw$validation$y$coupon3Used - mean(HTVset$H$coupon3Used))^2)/mean(fmw$validation$y$coupon3Used)^2
+
+   ## pets important
+   petes_cols = readRDS("../pete/predictions/importance_H3_0.5.rds")
+```
+
+## Estimating the proportion of coupons used in each column by bootstrapping the historical set
+<!--- rf: R code (No Results in Document) -->
+```{r rf,cache=FALSE}
+   B = 100000
+   n = nrow(fmw$validation$y)
+   boot.samples = sample(1:nrow(HTVset$H), size = B * n, replace = TRUE)
+   cpn1.boots = rowMeans(matrix(HTVset$H$coupon1Used[boot.samples], B, n))
+   cpn2.boots = rowMeans(matrix(HTVset$H$coupon2Used[boot.samples], B, n))
+   cpn3.boots = rowMeans(matrix(HTVset$H$coupon3Used[boot.samples], B, n))
+
+   boots.df = data.frame(iter = 1:B, "coupon1" = cpn1.boots, "coupon2" = cpn2.boots, "coupon3" = cpn3.boots)
+
+   boots.melt = boots.df %>% gather(coupon, proportion,-iter) 
+
+   chk1 = fmw$validation$y %>% summarize(coupon1 = mean(coupon1Used), coupon2 = mean(coupon2Used), coupon3 = mean(coupon3Used)) %>% gather(coupon,proportion)
+   chk2 = fmw$train$y %>% summarize(coupon1 = mean(coupon1Used), coupon2 = mean(coupon2Used), coupon3 = mean(coupon3Used)) %>% gather(coupon,proportion)
+   chk3 = HTVset$H %>% summarize(coupon1 = mean(coupon1Used), coupon2 = mean(coupon2Used), coupon3 = mean(coupon3Used)) %>% gather(coupon,proportion)
+
+   boots.melt %>% ggplot(aes(x=proportion)) + geom_density(fill="white") + facet_grid(~coupon) + 
+   geom_vline(data=chk1,aes(xintercept = proportion), color="red") + 
+   geom_vline(data=chk2,aes(xintercept = proportion), color="black") + 
+   geom_vline(data=chk3,aes(xintercept = proportion), color="blue")
+
+   ggpairs(boots.df[,2:4],alpha=.01)
+
+#
+   quantile(boots.df$coupon1,c(.025,.975))
+
+   set.seed = 1999
+   #prior estimates: mean of coupon use at .2, F(.025) = .1337, F(.975) = .2758
+   alpha.est = c(24,20, 16)
+   beta.est = c(4,4.5,5)*alpha.est
+
+   qbeta(.025,alpha.est,beta.est)
+   qbeta(.975,alpha.est,beta.est)
+```
+This gives us the following posterior for $p_1, p_2, p_3$:
+<!--- : R code (No Results in Document) -->
+```{r cache=FALSE}
+   nrow(HTVset$H)
+   p1 = (sum(HTVset$H$coupon1Used) + alpha.est[1])/(alpha.est[1] + beta.est[1] + nrow(HTVset$H))
+   p2 = (sum(HTVset$H$coupon2Used) + alpha.est[2])/(alpha.est[2] + beta.est[2] + nrow(HTVset$H))
+   p3 = (sum(HTVset$H$coupon3Used) + alpha.est[3])/(alpha.est[3] + beta.est[3] + nrow(HTVset$H))
+```
+
+# Check the data
+<!--- chkh: R code (No Results in Document) -->
+```{r chkh,cache=FALSE}
+   ## isolate the X and y for set 1
+   Xtrn = fml$train$X
+   ytrn = fml$train$y
+   
+   ## remove the naive columns
+   Xtrn = Xtrn[,!grepl("naive",names(Xtrn))]
+
+   ## keep the validation sets
+   Xval = fml$validation$X
+   yval = fml$validation$y$couponUsed
+```
+
+And this is our loss function:
+<!--- loss: R code (No Results in Document) -->
+```{r loss,cache=FALSE}
+   lossFunMethod = function(yval,Xval,method,cpncols=NULL,wts=1){
+      if(is.null(cpncols)){
+         hatmat = as.matrix(matrix(predict(method,newdata = Xval,type="response")/wts,ncol=3,byrow=TRUE))
+         ymat = matrix(yval,ncol=3,byrow=TRUE)
+         error = colSums((ymat - hatmat)^2)
+         wt = colMeans(ymat)^2
+      }else{
+         yhat = predict(method,newdata = Xval,type="response")
+         err1 = sum(((yhat/wts - yval)[which(cpncols == 1)])^2)
+         err2 = sum(((yhat/wts - yval)[which(cpncols == 2)])^2)
+         err3 = sum(((yhat/wts - yval)[which(cpncols == 3)])^2)
+         error = c(err1,err2,err3)
+         wt = sapply(1:3, function(i) (mean(yval[which(cpncols == i)])^2))
+      }
+
+      cat("The coupon error is:  ",sum(error/wt),"\n")
+      cat("By column error:      ",error,"\n")
+      cat("By column weight:     ",wt,"\n\n")
+      return(sum(error/wt))
+   }
+
+   lossFunPreds = function(predicted,actual,cpncols=NULL){
+      res = (predicted - actual)^2
+      if(!is.null(cpncols)){
+         error = sapply(1:3, function(i) sum(res[cpncols==i]))
+         wt =    sapply(1:3, function(i) mean(actual[cpncols==i])^2)
+      }else{
+         error = colSums(matrix(res,nrow=3,byrow=TRUE))
+         wt = colMeans(matrix(actual,nrow=3,byrow=TRUE))^2 
+      }
+
+      cat("The coupon error is:  ",sum(error/wt),"\n")
+      cat("By column error:      ",error,"\n")
+      cat("By column weight:     ",wt,"\n\n")
+      return(sum(error/wt))
+   }
+```
+
+The following functions will help me in this process:
+<!--- : R code (No Results in Document) -->
+```{r cache=FALSE}
+   ## I will use cross validation to estimate an error instead of checking the validation set
+   RFxVal = function(CVk,Xrf,yrf,mtry=8,ntree=1000,maxnodes=50,returnERR = FALSE,wts=1){
+      couponCol = rep(1:3,nrow(Xrf)/3)
+
+      #yrf_fit
+      yrf_fit = yrf*wts
+
+      row.order = sample(1:nrow(Xrf))
+      CV.bounds = round(seq.int(1, nrow(Xrf), length=(CVk+1)))
+      CV.bounds[CVk] = CV.bounds[CVk] + 1
+      OOBset = lapply(1:CVk,function(i) (row.order[CV.bounds[i]:(CV.bounds[i+1]-1)]))
+
+      #Fit a random forest for couponUsed
+      cvRF = function(rows) randomForest(Xrf[-rows,], y=yrf_fit[-rows], ntree=ntree, mtry=mtry, replace=TRUE, maxnodes = maxnodes)
+
+      message("Fitting randomForest")
+      rf_cvs = lapply(1:CVk, function(i) cvRF(OOBset[[i]]))
+
+      message("Calculating Loss")
+      lossFunction = lapply(1:CVk, function(i) lossFunMethod(yrf[OOBset[[i]]],Xrf[OOBset[[i]],],rf_cvs[[i]],cpncols=couponCol[OOBset[[i]]],wts=wts))
+
+      cat("The mean CV coupon error is:  ",mean(unlist(lossFunction)),"\n")
+      if(returnERR){
+         return(unlist(lossFunction))
+      }else{
+         return(rf_cvs)
+      }
+   }
+
+   ## CV to get the mean importance
+   RFxVal_imp = function(RFs){
+      RFimp = data.frame("feature" = rownames(RFs[[1]]$importance), "IncNodePurity1" = RFs[[1]]$importance)
+      rownames(RFimp) = NULL
+      names(RFimp) = c("feature","IncNodePurity1")
+      for(i in 2:length(RFs)){
+         RFimp.i = data.frame("feature" = rownames(RFs[[i]]$importance), "IncNodePurity1" = RFs[[i]]$importance)
+         names(RFimp.i) = c("feature",paste0("IncNodePurity",i))
+         rownames(RFimp.i) = NULL
+         RFimp = RFimp %>% left_join(RFimp.i,by="feature")
+      }
+      RFimplong = RFimp %>%
+         gather(colname,IncNodePurity,-feature) %>%
+         mutate(CViteration = as.numeric(gsub("IncNodePurity","",colname))) %>%
+         select(feature,CViteration,IncNodePurity) %>%
+         arrange(feature,CViteration)
+
+      RFimplongMeans = RFimplong %>% 
+         group_by(feature) %>% 
+         summarize(meanIncNodePurity = mean(IncNodePurity))
+
+      CVimpplotfunc = function(dsn){
+         CVplot = ggplot(data=dsn, aes(x=CViteration,y=IncNodePurity, group = feature, color=feature)) +
+                     geom_line() +
+                     theme(legend.position = "none") + 
+                     geom_text(data = RFimplong[RFimplong$CViteration == 1,],
+                               aes(label = feature), hjust=1,size=.1)
+         CVplot = direct.label(CVplot+xlim(0,length(RFs) + 10),"last.qp")
+         return(CVplot)
+      }
+
+      RFimp = list("importance"=RFimp, 
+                   "iterations" = RFimplong, 
+                   "mean" =RFimplongMeans, 
+                   "plot" = CVimpplotfunc(RFimplong),
+                   makeplot = CVimpplotfunc)
+
+      return(RFimp)
+   }
+```
+
+#I am going to start with a simple random forest
+We can weight our responses and hopefully use this to get better estimates by unweighting 
+<!--- : R code (No Results in Document) -->
+```{r cache=FALSE}
+   ## lets try a small random forest
+   library(randomForest)
+   
+   ## get the similarity columns
+   sim_columns = names(Xtrn)[c(3,grep("sim_", names(Xtrn)))]
+   sim_columns = sim_columns[c(1,2,3,10,14,16,17,18)]
+
+   ## get single way llrs:
+   llr1_columns = names(Xtrn)[which(grepl("llr", names(Xtrn)) & !grepl("X",names(Xtrn)))]
+
+   #EarlyRec
+   coupon = c(names(Xtrn)[grepl("llr",names(Xtrn)) & grepl("cpn",names(Xtrn))],
+              names(Xtrn)[grepl("Rec",names(Xtrn)) & grepl("Col",names(Xtrn))],
+              names(Xtrn)[grepl("Shop",names(Xtrn)) & grepl("Col",names(Xtrn))])
+
+   #zprice orig
+   zprice_orig = names(Xtrn)[grepl("orig",names(Xtrn))]
+
+   #The predictor and response columns
+   Xrf = Xtrn[,unique(c(sim_columns,llr1_columns,zprice_orig,coupon))]
+   #Xrf$couponCol = factor(rep(1:3,nrow(Xrf)/3))
+
+   yrf = ytrn[,"couponUsed"]
+```
+
+<!--- chunk-label: R code (No Results in Document) -->
+```{r chunk-label,cache=FALSE}
+   #weighted error
+   yrfw = ytrn[,"couponUsed"]*rep(c(1/p1,1/p2,1/p3),times=nrow(Xrf)/3)
+   weighted.rf = randomForest(Xrf, y=yrfw, ntree=5000, mtry=11, replace=TRUE, maxnodes = 50)
+
+   saveRDS(weighted.rf$importance, file="./written_data/importance_cols.rds")
+
+   Xv = Xval[,which(names(Xval) %in% names(Xrf))]
+   weight.fit = predict(weighted.rf,newdata = Xv,type="response")*rep(c(p1,p2,p3),times=nrow(Xv)/3)
+
+   dtrn = Xn %>% left_join(dm,by=c("orderID","couponCol"))
+
+   dtrn$rferror = ((yrf-weighted.rf$predicted*rep(c(p1,p2,p3)))^2)
+
+   dtrn$check = dtrn$rferror > .6
+
+   rfbrand3 = dtrn %>% filter(brand == "brand3")
+   qplot(rferror, color = brand, geom='histogram', binwidth = .05,data = dtrn,fill=factor(couponCol)) + facet_wrap(~brand)
+   qplot(rferror, color = brand, geom='histogram', binwidth = .05,data = rfbrand3,fill=couponID) + facet_wrap(~brand)
+          ,times=nrow(Xrf)/3))
+
+   #validation
+   Xv = Xv[,which(names(Xv) %in% names(Xrf))]
+   Xv$couponCol = rep(1:3,nrow(Xv)/3)
+   #mse
+   w.actualLoss = colSums((matrix(yval,ncol=3,byrow=TRUE) - matrix(weight.fit,ncol=3,byrow=TRUE))^2)
+   w.weightedLoss = colSums((matrix(yval,ncol=3,byrow=TRUE) - matrix(weight.fit,ncol=3,byrow=TRUE))^2)/(colMeans(matrix(yval,ncol=3,byrow=TRUE))^2)
+
+   cat("loss unweighted rf (no col weights):",sum(actualLoss))
+   cat("loss unweighted rf (col weights):   ",sum(weightedLoss))
+
+   cat("loss weighted rf (no col weights):",sum(w.actualLoss))
+   cat("loss weighted rf (col weights):   ",sum(w.weightedLoss))
+
+
+   ## validation sets
+   
+   rf1 = randomForest(Xrf, y=yn$couponUsed, ntree=8000, mtry=11, replace=TRUE, maxnodes = 100)
+
+   ## I will use cross validation to estimate an error instead of checking the validation set
+   set.seed = 1999
+   mnodes = 5:14
+   #nodesCV = sapply(mnodes, function(x) RFxVal(5,Xrf,yrf,mtry=6,ntree=5000,maxnodes=100,returnERR=TRUE))
+
+   ## How many nodes to play???
+   #colMeans(nodesCV)
+   qplot(5:14,colMeans(nodesCV))
+
+   ## Add weights
+   mnodes = 5:14
+   #wtd.nodesCV = sapply(mnodes, function(x) RFxVal(5,Xrf,yrf,mtry=6,ntree=5000,maxnodes=100,returnERR=TRUE,wts=rep(c(1/p1,1/p2,1/p3),times=nrow(Xrf)/3)))
+
+   ## looks like 11
+   RFfit = RFxVal(10,Xrf,yn[,"couponUsed"],mtry=11,ntree=8000,maxnodes=100,returnERR=FALSE,wts=)
+
+   #fit full data
+   rf0 = randomForest(Xrf, y=yn$couponUsed, ntree=5000, mtry=11, replace=TRUE, maxnodes = 100)
+   rf1 = randomForest(Xrf, y=yn$couponUsed, ntree=8000, mtry=11, replace=TRUE, maxnodes = 100)
+
+   res =RFxVal_imp(RFfit)
+   #get the output
+   lossFunMethod(yv$couponUsed,Xv[,which(names(Xv) %in% names(Xrf))],rf0)
+```

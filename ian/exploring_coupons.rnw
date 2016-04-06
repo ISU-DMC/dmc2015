@@ -1,0 +1,639 @@
+% For LaTeX-Box: root = exploring_coupons.tex 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  File Name: exploring_coupons.rnw
+%  Purpose:
+%
+%  Creation Date: 12-04-2015
+%  Last Modified: Sun Jun 21 18:36:02 2015
+%  Created By:
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%-- Set parent fil
+<<set-parent, echo=FALSE, message=FALSE, cache=FALSE, include = TRUE>>=
+   #set up knitr
+   # devtools::install_github('imouzon/usefulR')
+   require(usefulR)
+
+   working.dir = "/Users/user/dmc2015/ian/"
+   setwd(working.dir)
+   knitrSetup(rootDir=FALSE,use.tikz=FALSE)
+
+   #set up file locations
+   parent.file = makeParent(parentDir = getwd(),overwrite=FALSE)
+   set_parent(parent.file)
+@
+
+%-- title page and quote
+\HWinfo{April 23 2015}{}{}
+\titleheader
+
+I am using the following packages:
+%-- paks: R code (Code in Document)
+<<paks, echo=TRUE, cache=FALSE, message=FALSE, include=TRUE>>=
+   library(ggplot2)
+   library(lubridate)
+   library(xtable)
+   library(foreach)
+   library(rCharts)
+   library(plyr)
+   library(dplyr)
+   #options(dplyr.width = Inf)
+   library(reshape2)
+   library(gtools)
+   library(sqldf)
+@
+and my working directory is set to \verb!dmc2015/ian!.
+
+\section{Reading the Data}
+I am now reading the feature matrix:
+%-- readDat: R code (Code in Document)
+<<readDat, echo=TRUE, cache=FALSE, include=TRUE>>=
+   #training set ("historical data")
+   featMat = readRDS("~/dmc2015/data/clean_data/universalCleanData.rds")
+   trn = featMat$train$X
+   cls = featMat$class$X
+
+   #combine the two sets and stack the coupons to focus on coupon specifics information
+   source("./R/stackCoupons.R")
+   d.stack = stackCoupons(featMat,featMat)
+@
+
+\section{Exploring Coupons}
+Exploring customer behavior with respect to coupons:
+\subsection{Guillermo's Game}
+%-- guillermosGame: R code (Code in Document)
+<<guillermosGame, echo=TRUE, cache=TRUE, include = TRUE>>=
+   set.seed(1999)
+
+   names(d.stack)
+   names(d.stack$combined)
+   ggplot(data=d.stack$train,aes(x=couponsReceived,y=reward,geom='line',group=interaction(couponCol,userID))) +geom_line()
+
+   GuillermosGame = function(userID,showOrder=FALSE){
+      if(!showOrder){
+         res = d.stack$combined %>% 
+            filter(userID %in% randomID) %>% 
+            do(plots=ggplot(data=.,aes(x=couponsReceived,y=basketValue,color=userID,group=interaction(couponCol,userID)))+facet_wrap(~couponCol)+ geom_line()+geom_point())
+      }else{
+         res = d.stack$combined %>% 
+            filter(userID %in% randomID) %>% 
+            do(plots=ggplot(data=.,aes(x=couponsReceived,y=basketValue,color=userID,group=interaction(couponCol,userID)))+facet_wrap(~couponCol)+geom_line()+geom_point(data=.,aes(x=couponsReceived,y=basketValue,shape=as.factor(couponUsed),size=as.factor(couponUsed))))
+      }
+      return(res$plots)
+   }
+      
+@
+   
+%-- Name: R code (Code in Document)
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   randomID = sample(d.stack$combined$userID)[1]
+   GuillermosGame(randomID)
+   GuillermosGame(randomID,TRUE)
+@
+
+\subsection{Basic Questions About Coupons}
+We can now address some basic questions. 
+Most of these questions can be turned into a dataframe.
+First, though, lets handle these coupons names:
+
+%-- smartLabel: R code (Code in Document)
+<<smartLabel, echo=TRUE, cache=TRUE, include = TRUE>>=
+dsn=d.stack$combined
+varn="couponID"
+abrv="cpn"
+orderby=c("orderID","couponCol","dsn")
+listout=FALSE
+replace=TRUE
+   smartLabel = function(dsn,varn,abrv="smart.",orderby=NULL,replace=FALSE,listout=TRUE){
+      #dsn is the dataset with a "anonymous" ID variable
+      #varn is the label to improve
+      #orderby is a variable to sort the new ids by
+      #replace = TRUE removes old label
+      #        = FALSE keeps old label and names new label "smart.varn"
+      #list.out = TRUE returns a list with the data and the map varn to smart.varn
+      #         = FALSE returns the dataset only
+
+      if(!is.null(orderby)){
+         orderby_query = gsub("orderby",paste(orderby,collapse=", "),"select varn, orderby from dsn order by orderby")
+         orderby_query = gsub("varn",varn,orderby_query)
+         dsn_labels = data.frame(unique(sqldf(orderby_query)[,varn]))
+         names(dsn_labels) = varn
+         dsn_labels$smart_label = paste0(abrv,1:nrow(dsn_labels))
+         dsn = sqldf(gsub("varn",varn,"select a.*, b.smart_label from dsn as a left join dsn_labels as b on a.varn = b.varn"))
+      }else{
+         dsn_labels = data.frame(unique(dsn[,varn]))
+         names(dsn_labels) = varn
+         dsn_labels$smart_label = paste0(abrv,1:nrow(dsn_labels))
+         dsn = sqldf(gsub("varn",varn,"select a.*, b.smart_label from dsn as a left join dsn_labels as b on a.varn = b.varn"))
+      }
+
+      if(replace){
+         dsn[,varn] = dsn$smart_label
+         dsn = dsn[,-which(names(dsn) == "smart_label")]
+      }else{
+         names(dsn)[which(names(dsn) == "smart_label")] = paste0("smart_",varn)
+      }
+
+      if(listout){
+         message("returning a list")
+         ret = list("data" = dsn,"mapping"=dsn.labels)
+      }else{
+         ret = dsn
+      }
+
+      return(ret)
+   }
+@
+%-- changeLabels: R code (Code in Document)
+<<changeLabels, echo=TRUE, cache=TRUE, include = TRUE>>=
+   d.stack$combined = smartLabel(d.stack$combined,"couponID",abrv="cpn",orderby=c("orderID","couponCol","dsn"),listout=FALSE,replace=TRUE)
+@
+And while we're at it, let's fix the other "scrambled" IDs:
+%-- changemorelabels: R code (Code in Document)
+<<changemorelabels, echo=TRUE, cache=TRUE, include = TRUE>>=
+   brandIDmap = smartLabel(d.stack$combined,"brand",abrv="brand",orderby=c("orderID","couponCol","dsn"),listout=TRUE,replace=TRUE)
+   d.stack$combined = brandIDmap$data 
+
+   groupIDmap = smartLabel(d.stack$combined,"productGroup",abrv="prod",orderby=c("orderID","couponCol","dsn"),listout=TRUE,replace=TRUE)
+   d.stack$combined = groupIDmap$data 
+@
+Getting the category IDs to be more simple is not insignificant:
+%-- Name: R code (Code in Document)
+<<simpCatsIDs, echo=TRUE, cache=TRUE, include = TRUE>>=
+   catID.d = d.stack$combined[,c("orderID","categoryIDs")] %>% 
+      mutate(parts = strsplit(categoryIDs,",")) %>%
+         group_by(categoryIDs) %>%
+         do( data.frame(
+           {
+              idx = 1:length(.$parts[[1]])
+              lst = lapply(idx, function(x) .$parts[[1]][x])
+              names(lst) = lapply(idx,function(x) paste0("categoryIDs",x))
+                                  (lst)
+           }, stringsAsFactors=FALSE)
+          ) %>%
+          inner_join(d.stack$combined,by="categoryIDs")
+
+   catID = melt(catID.d,id=c("orderID","dsn","couponCol"),measure=2:6)
+   catID$variable = as.numeric(as.character(gsub("categoryIDs","",catID$variable)))
+   names(catID)[4] = "categoryEntry"
+   names(catID)[5] = "categoryIDs"
+
+   catID = catID[which(!is.na(catID$categoryIDs)),]
+   catID = catID[with(catID,order(orderID,couponCol,categoryEntry,dsn)),]
+
+   catIDmap = smartLabel(catID,"categoryIDs",abrv="cat",orderby=c("orderID","couponCol","categoryEntry","dsn"),listout=TRUE,replace=TRUE)
+   catIDmap$data = catIDmap$data[with(catIDmap$data,order(orderID,couponCol,categoryEntry,dsn)),]
+
+   catIDmap$map
+   d.stack$combined[1,33]
+
+   catID.p = ddply(catIDmap$data,.(orderID,dsn,couponCol), summarize, paste(unique(categoryIDs),collapse=','))
+
+   d.stack$combined = merge(d.stack$combined[,-which(names(d.stack$combined) == "categoryIDs")],catID.p,by=c("orderID","dsn","couponCol"),all.x=TRUE)
+@
+
+I'm going to write this test set and training set:
+%-- writeRdata: R code (Code in Document)
+<<writeRdata, echo=TRUE, cache=TRUE, include = TRUE>>=
+   write.d = splitTrain(d.stack$combined) 
+
+   saveRDS(write.d$train,"train.rds")
+   saveRDS(write.d$test,"test.rds")
+
+   write.csv(write.d$train,file='train.csv',row.names=FALSE)
+   getwd()
+@
+
+
+
+
+How many unique coupons are there total:
+%-- : R code (Code in Document)
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   #build a frame to gather info about coupons
+   couponInfo = ddply(d.stack$combined,.(couponID),summarise,
+                   firstRec = min(couponsReceived),
+                   firstOrd = min(orderTime))
+   qplot(firstRec,couponID,data=couponInfo)
+
+   length(unique(couponInfo$couponID))
+   length(unique(d.stack$train$couponID))
+
+   head(d.stack$train$couponsReceived)
+   head(as.numeric(d.stack$train$couponsReceived))
+   trm = d.stack$train[which(!is.na(d.stack$train$couponUsed)),]
+
+   trm$superEarlyRec = factor(c("Early","Late")[1*(-as.numeric(trm$couponsSent) + as.numeric(trm$couponsReceived) > 60*60*8) + 1])
+   trm$FirstDay= factor(c("First Day","not first")[1*(-as.numeric(trm$couponsSent) + as.numeric(trm$couponsReceived) > 60*60*28) + 1])
+   qplot(as.numeric(couponsReceived) - as.numeric(couponsSent), geom='density',data=d.stack$train, alpha=I(.1),fill=factor(couponUsed),facets=.~couponUsed) + geom_vline(aes(xintercept=60*60*8))
+
+   trm$ordtimeclass = factor(c("order fast", "order slow")[1*(as.numeric(trm$orderTime) -as.numeric(trm$couponsReceived)  > 60*60*1) + 1])
+
+   png("~/dmc2015/presentation/team_1_pres/www/figs/order_fast-shop_fast.png",width = 480, height=480)
+   qplot(as.factor(couponUsed),facets=FirstDay~ordtimeclass, data=trm)
+   dev.off()
+
+   with(trm[(trm$superEarlyRec=="Early"),],table(ordtimeclass,couponUsed)/rowSums(table(ordtimeclass,couponUsed)))
+   with(trm[(trm$superEarlyRec=="Late"),],table(ordtimeclass,couponUsed)/rowSums(table(ordtimeclass,couponUsed)))
+
+   names(trm)
+   qplot(brand,data=trm,fill=factor(couponUsed))
+  
+   dftrn = data.frame(table(trn$userID))
+   names(dftrn)
+   
+   qplot(factor(Freq), data=dftrn,geom='bar')
+
+#logistic reg
+   catIDs = unique(unlist(strsplit(trm$categoryIDs,",")))
+   prodGrps = unique(trm$productGroup)
+   brands = unique(trm$brand)
+   logregMat = matrix(0,nrow=nrow(trm), ncol = length(c(catIDs,prodGrps,brands)) + 1)
+
+   for(i in 1:length(catIDs)){
+      logregMat[,i] = sapply(1:nrow(trm), function(k) 1*(catIDs[i] %in% unlist(strsplit(trm$categoryIDs[k],','))))
+   }
+
+   for(i in 1:length(prodGrps)){
+      logregMat[,(i + length(catIDs))] = 1*grepl(prodGrps[i],trm$productGroup)
+   }
+
+   for(i in 1:length(brands)){
+      logregMat[,(i + length(prodGrps) + length(catIDs))] = 1*grepl(brands[i],trm$brand)
+   }
+
+   logregMat[,(length(brands) + length(prodGrps) + length(catIDs)+1)] = trm$premiumProduct
+
+   logregDat = data.frame(couponUsed = trm$couponUsed)
+   logregDat = cbind(logregDat,logregMat)
+   names(logregDat) = c("couponUsed", paste0("catID",1:length(catIDs)), paste0("prodGrps",1:length(prodGrps)), paste0("brand",1:length(brands)), "premProd")
+
+   head(logregDat)
+
+   logRegmod = glm(formula = couponUsed ~ .,family='binomial',data=logregDat)
+
+   library(pls)
+   plsr(couponUsed ~.,ncomp=1,data=logregDat)
+
+
+   
+
+
+
+      for(j in 1:length
+
+             unique(unlist(strsplit(trm$categoryIDs,",")))
+
+
+   length(unique(trm$
+
+   names(trm)
+   head(trm$
+
+
+
+
+   tbl = ddply(trm, .(brand), summarize, nSent = length(couponUsed), nUsed = sum(couponUsed), nCoupons = length(unique(couponID)))
+   tbl$propUsed = tbl$nUsed/tbl$nSent
+   ggplot(data=tbl,aes(x=nSent,y=nCoupons,color=brand)) + geom_point()
+   qplot(nSent,nCoupons,color=brand,data=tbl)
+   qplot(nSent,propUsed,size=nCoupons, data=tbl)
+   qplot(nSent,propUsed,size=nCoupons, data=tbl[which(tbl$nSent < 500),])
+   data.frame(with(trm,table(brand,couponUsed)))
+   with(trm,table(brand,couponUsed)/rowSums(table(brand,couponUsed)))
+
+
+   ggplot(data=trm,aes(x=ordtimeclass, fill=couponUsed)) + geom_bar()
+   qplot(ordtimeclass,facets=.~couponUsed,data=trm)
+   qplot(-as.numeric(couponsReceived) + as.numeric(orderTime), geom='density',data=d.stack$train, alpha=I(.1),fill=factor(couponUsed),facets=.~couponUsed) + geom_vline(aes(xintercept=60*60*6))
+   qplot(as.numeric(couponsReceived), as.numeric(orderTime), data=d.stack$train, alpha=I(.1),color=factor(couponUsed),facets=.~couponUsed)
+
+   
+   couponInfo %>% 
+      select(couponID) %>%
+      group_by(couponID) %>% 
+      tally %>%
+      group_by(couponID) %>%
+      mutate(pct = (100*n)/sum(n))
+      
+      
+   nrow(couponInfo)
+   names(
+   ddply(couponID, couponID, summarise,)
+   d.stack$combined %>% 
+      group_by(couponID) %>%
+      select(couponID) %>%
+      summarise(
+            freq = nrow(couponInfo)
+      )
+   , couponID) %>% summarise(couponID)
+@
+How many unique coupons are there in the training set:
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   #which IDs in the training set
+   trainIDs = unique(d.stack$train$couponID)
+
+   couponInfo$inTrain = as.numeric(couponInfo$couponID %in% trainIDs)
+
+   sum(couponInfo$inTrain)
+@
+How many unique coupons are there in the test set:
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   #unique coupon IDs in test set:
+   testIDs = unique(d.stack$test$couponID)
+
+   couponInfo$inTest = as.numeric(couponInfo$couponID %in% testIDs)
+
+   sum(couponInfo$inTest)
+@
+Are there coupons in the test set that are not in the training set:
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   #101 coupons in the test set but not in train set
+   sum(couponInfo$inTrain < couponInfo$inTest)
+@
+How often are these coupons in the test set:
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   #in the test set
+   cpnFreq = data.frame(table(d.stack$combined[,c("couponID")]))
+   names(cpnFreq) = c("couponID","nCouponReceived")
+   couponInfo = merge(couponInfo,cpnFreq,by="couponID",all.x=TRUE)
+@
+How often is the coupon used?
+<<echo=TRUE, cache=TRUE, include = TRUE>>=
+   #in the test set
+   cpnFreq = data.frame(table(couponInfo[,c("couponID","couponUsed")]))
+   names(cpnFreq) = c("couponID","nCouponReceived")
+   couponInfo = merge(couponInfo,cpnFreq,by="couponID",all.x=TRUE)
+@
+
+
+How many unique coupons are there in the training set:
+
+%-- dds: R code (Code in Document)
+<<dds, echo=TRUE, cache=TRUE, include = TRUE>>=
+      #get the melted sets
+      melt.cpni = function(i){
+         ret = melt(d$d, idcols, cpn.i[[i]]); 
+         ret$variable = gsub(i,'',names(ret));
+         return(ret)
+      }
+      melt.d = lapply(1:3, function(i) melt(d$d,idcols,cpn.i[[i]]))
+      head(melt.d[[1]])
+      message(gsub("idvars",paste(names(d)[cpn.i[[1]]],collapse=',\n\t'),m1))
+
+
+      d1 = d[,c(1:14,15:22,39,42)]
+   names(d1)[15:23] = gsub('1','',names(d)[c(15:22,39)])
+   m1=melt(d1,id=c(1:22,24),measure=c(23))
+   m1$couponCol=1
+
+   d2 = d[,c(1:14,23:30,40,42)]
+   names(d2)[15:23] = gsub('1','',names(d)[c(15:22,39)])
+   m2=melt(d2,id=c(1:22,24),measure=c(23))
+   m2$couponCol=2
+
+   d3 = d[,c(1:14,31:38,41,42)]
+   names(d3)[15:23] = gsub('1','',names(d)[c(15:22,39)])
+   m3=melt(d3,id=c(1:22,24),measure=c(23))
+   m3$couponCol=3
+
+   d.m = rbind(m1,m2,m3)
+   trn$timetoreact = trn$couponsExpire - trn$couponsReceived
+   qplot(as.numeric(timetoreact),data=trn)
+
+   qplot(
+         ,data=trn,color=orderTimeDoW,facets=.~orderTimeDoW,geom='density',alpha=I(.5),fill= as.factor(coupon1Used))
+
+   trn$couponsReceived- trn$couponsSent
+
+
+
+   qplot(reward2, price2-basePrice2,data=d)
+
+
+   names(d.m)
+
+d.cpn = d.m[,c("orderID","couponID")]
+d.cpn2 = d.cpn
+names(d.cpn2)[2] = paste0(names(d.cpn)[2],'2')
+
+d.cpns = merge(d.cpn[,c("orderID","couponID")], d.cpn2[,c("orderID","couponID2")], by="orderID")
+d.tbl = data.frame(with(d.cpns,table(couponID,couponID2)))
+d.tbl = d.tbl[which(d.tbl$couponID != d.tbl$couponID2),]
+head(d.tbl)
+names(d.tbl)
+
+qplot(couponID,couponID2,data=d.tbl,size=Freq)
+
+d.m2 = d.m
+names(d.m2
+byorder = ddppy(d.m,.(orderID),summarize,
+                
+bycpn = ddply(d.m,.(couponID),summarize, 
+                  nBasket = length(unique(basketValue)),
+                  nbrands = length(unique(brand)),
+                  nGroup = length(unique(productGroup)),
+                  nCat = length(unique(productGroup)),
+                  nRewards = length(unique(reward)),
+                  times = length(price),
+                  times1 = sum(couponCol==1),
+                  times2 = sum(couponCol==2),
+                  times3 = sum(couponCol==3),
+                  nProd = length(unique(productGroup)),
+                  nPrice = length(unique(price)),
+                  nBase = length(unique(basePrice)),
+                  FirstRec = min(couponsReceived))
+cpnm = melt(bycpn,id="couponID",measure.vars = c('times','times1','times2','times3'))
+
+freqtab = melt(bycpn,id=c("couponID","times"),measure.vars = c('times1','times2','times3'))
+
+qplot(times,value,color=variable,data=freqtab)
+head(freqtab)
+                
+freqtab = with(bycpn,table(times,times1,times2,times3))
+relfreqtab = with(bycpn,table(times,times1/times,times2/times,times3/times))
+
+names(cpnm)
+qplot(variable,value,data=cpnm,geom='line',group=couponID)
+
+qplot(couponID,nBasket,data=bycpn)
+byprod$ncoupons = as.factor(byprod$ncoupons)
+
+byprod = ddply(d.m, .(productGroup,premiumProduct,categoryIDs,brand), summarize,
+                  ncoupons = length(unique(couponID)),
+                  nRewards = length(unique(reward)),
+                  times1 = sum(couponCol==1),
+                  times2 = sum(couponCol==2),
+                  times3 = sum(couponCol==3),
+                  nProd = length(unique(productGroup)),
+                  nPrice = length(unique(price)),
+                  nBase = length(unique(basePrice)),
+                  FirstRec = min(couponsReceived))
+
+summary(byprod$ncoupons)
+byprod$ncoupons = as.factor(byprod$ncoupons)
+
+
+qplot(ncoupons,data=byprod,biwidth=1)
+
+
+d.m$couponID = factor(d.m$couponID,levels=bycpn$couponID[order(bycpn$FirstRec)])
+qplot(couponsReceived,couponID,data=d.m,color=couponsReceivedDoW)
+names(d.m)
+levels(bycpn
+qplot(FirstSent,couponID,data=cpnFirstSent)
+names(cpnReward)
+qplot(couponID,nRewards,data=cpnReward)
+
+qplot(couponsReceived,couponID,data=d.m)
+
+
+m2=melt(d,id=c(1:14,23:30),measure=c(40))
+m3=melt(d,id=c(1:14,31:38),measure=c(40))
+names(d)
+m2
+
+nrow(trn)
+trn[5000,]
+
+newfeatureMat = data.frame(orderID = trn$orderID)
+head(newfeatureMat)
+trn[5000,]
+newfeatureMat$timesherebefore = c(0,sapply(2:nrow(trn), function(i) sum(grepl(trn$userID[i],trn$userID[1:(i-1)]))))
+newfeatureMat$timesherebefore = c(0,sapply(2:nrow(trn), function(i) sum(
+                                                                        trn$userID[i]==trn$userID[1:(i-1)]) 
+                                                                        & trn$batchID[i]==trn$batchID[1:(i-1)])
+                                                                        & trn$couponID1[i]==trn$couponID1[1:(i-1)])
+                                                                        & trn$coupon1Used[1:(i-1)]  == 1
+
+                                                                        )
+)
+)
+newfeatureMat$beenherebefore = 1*
+   (
+    newfeatureMat$timesherebefore
+    >0)
+write.csv(newfeatureMat, file="mynewfeat.csv", row.names=FALSE)
+sum(grepl("dogs",c("dogs", "cats","dogs")))
+
+       names(d)
+@
+
+
+
+
+   trn = batchres$train 
+   names(trn)
+   trn$timetoreact = trn$couponsExpire - trn$couponsReceived
+   qplot(as.numeric(timetoreact),data=trn)
+
+   qplot(
+         ,data=trn,color=orderTimeDoW,facets=.~orderTimeDoW,geom='density',alpha=I(.5),fill= as.factor(coupon1Used))
+
+   trn$couponsReceived- trn$couponsSent
+
+
+
+   qplot(reward2, price2-basePrice2,data=d)
+
+   d1 = d[,c(1:14,15:22,39,42)]
+   names(d1)[15:23] = gsub('1','',names(d)[c(15:22,39)])
+   m1=melt(d1,id=c(1:22,24),measure=c(23))
+   m1$couponCol=1
+
+   d2 = d[,c(1:14,23:30,40,42)]
+   names(d2)[15:23] = gsub('1','',names(d)[c(15:22,39)])
+   m2=melt(d2,id=c(1:22,24),measure=c(23))
+   m2$couponCol=2
+
+   d3 = d[,c(1:14,31:38,41,42)]
+   names(d3)[15:23] = gsub('1','',names(d)[c(15:22,39)])
+   m3=melt(d3,id=c(1:22,24),measure=c(23))
+   m3$couponCol=3
+
+   d.m = rbind(m1,m2,m3)
+
+   names(d.m)
+
+d.cpn = d.m[,c("orderID","couponID")]
+d.cpn2 = d.cpn
+names(d.cpn2)[2] = paste0(names(d.cpn)[2],'2')
+
+d.cpns = merge(d.cpn[,c("orderID","couponID")], d.cpn2[,c("orderID","couponID2")], by="orderID")
+d.tbl = data.frame(with(d.cpns,table(couponID,couponID2)))
+d.tbl = d.tbl[which(d.tbl$couponID != d.tbl$couponID2),]
+head(d.tbl)
+names(d.tbl)
+
+qplot(couponID,couponID2,data=d.tbl,size=Freq)
+
+d.m2 = d.m
+names(d.m2
+byorder = ddppy(d.m,.(orderID),summarize,
+                
+bycpn = ddply(d.m,.(couponID),summarize, 
+                  nBasket = length(unique(basketValue)),
+                  nbrands = length(unique(brand)),
+                  nGroup = length(unique(productGroup)),
+                  nCat = length(unique(productGroup)),
+                  nRewards = length(unique(reward)),
+                  times = length(price),
+                  times1 = sum(couponCol==1),
+                  times2 = sum(couponCol==2),
+                  times3 = sum(couponCol==3),
+                  nProd = length(unique(productGroup)),
+                  nPrice = length(unique(price)),
+                  nBase = length(unique(basePrice)),
+                  FirstRec = min(couponsReceived))
+cpnm = melt(bycpn,id="couponID",measure.vars = c('times','times1','times2','times3'))
+
+freqtab = melt(bycpn,id=c("couponID","times"),measure.vars = c('times1','times2','times3'))
+
+qplot(times,value,color=variable,data=freqtab)
+head(freqtab)
+                
+freqtab = with(bycpn,table(times,times1,times2,times3))
+relfreqtab = with(bycpn,table(times,times1/times,times2/times,times3/times))
+
+names(cpnm)
+qplot(variable,value,data=cpnm,geom='line',group=couponID)
+
+qplot(couponID,nBasket,data=bycpn)
+byprod$ncoupons = as.factor(byprod$ncoupons)
+
+byprod = ddply(d.m, .(productGroup,premiumProduct,categoryIDs,brand), summarize,
+                  ncoupons = length(unique(couponID)),
+                  nRewards = length(unique(reward)),
+                  times1 = sum(couponCol==1),
+                  times2 = sum(couponCol==2),
+                  times3 = sum(couponCol==3),
+                  nProd = length(unique(productGroup)),
+                  nPrice = length(unique(price)),
+                  nBase = length(unique(basePrice)),
+                  FirstRec = min(couponsReceived))
+
+summary(byprod$ncoupons)
+byprod$ncoupons = as.factor(byprod$ncoupons)
+
+
+qplot(ncoupons,data=byprod,biwidth=1)
+
+
+d.m$couponID = factor(d.m$couponID,levels=bycpn$couponID[order(bycpn$FirstRec)])
+qplot(couponsReceived,couponID,data=d.m,color=couponsReceivedDoW)
+names(d.m)
+levels(bycpn
+qplot(FirstSent,couponID,data=cpnFirstSent)
+names(cpnReward)
+qplot(couponID,nRewards,data=cpnReward)
+
+qplot(couponsReceived,couponID,data=d.m)
+
+
+m2=melt(d,id=c(1:14,23:30),measure=c(40))
+m3=melt(d,id=c(1:14,31:38),measure=c(40))
+names(d)
+m2
+
+       names(d)
+@
+
